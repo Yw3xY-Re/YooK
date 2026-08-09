@@ -1,0 +1,2 @@
+CompileFlags:
+  Add: [-std=c++23, -m64, -fms-extensions, -Wall]
