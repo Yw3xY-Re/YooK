@@ -24,7 +24,6 @@
 #define WIN32_LEAN_AND_MEAN
 #include <Windows.h>
 #include <cstring>
-#include <vector>
 #include <memory>
 #include <algorithm>
 #include "YooK.hpp"
@@ -80,7 +79,7 @@ namespace YooK
         void* m_detour{ nullptr };
         void* m_trampoline{ nullptr };
 
-        std::vector<uint8_t> m_originalBytes;
+        Y3lib::Memory::vector<uint8_t> m_originalBytes;
         std::size_t m_stolenBytes{ 0 };
         std::size_t m_trampBytes{ 0 };
 
@@ -111,7 +110,7 @@ namespace YooK
     #define XIP Eip
 #endif
 
-    std::vector<YooK::Hook::Impl*> g_hookRegistry;
+    Y3lib::Memory::vector<YooK::Hook::Impl*> g_hookRegistry;
 namespace 
 {
     SRWLOCK g_registryLock = SRWLOCK_INIT;
