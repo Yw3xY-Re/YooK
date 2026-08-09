@@ -28,6 +28,8 @@
 #include <memory>
 #include <algorithm>
 #include "YooK.hpp"
+#include "Y3lib/include/Y3lib/Memory/Allocator/Allocator.hpp"
+#include "Y3lib/include/Y3lib/Syscalls/Syscalls.h"
 
 // Instruction Definitions
 
@@ -87,6 +89,16 @@ namespace YooK
         HookStatus m_status{ HookStatus::Idle };
 
         Impl(void* target, void* detour) noexcept : m_target(target), m_detour(detour) {}
+
+        static void* operator new(size_t size) noexcept
+        {
+            return Y3lib::Memory::MemoryManager::Instance().Allocate(size, Y3lib::Memory::TAG_GENERIC, _ReturnAddress());
+        }
+
+        static void operator delete(void* ptr) noexcept
+        {
+            Y3lib::Memory::MemoryManager::Instance().Free(ptr);
+        }
     };
 }
 
@@ -122,11 +134,11 @@ namespace
         while (searchAddr < maxAddr)
         {
             MEMORY_BASIC_INFORMATION mbi;
-            if (!VirtualQuery(reinterpret_cast<void*>(searchAddr), &mbi, sizeof(mbi))) [[unlikely]] break;
+            if (Syscall_QueryVirtualMemory(reinterpret_cast<void*>(searchAddr), 0, &mbi, sizeof(mbi), nullptr, g_SyscallTable) != 0) [[unlikely]] break;
 
             if (mbi.State == MEM_FREE && mbi.RegionSize >= size)
             {
-                void* allocated = VirtualAlloc(mbi.BaseAddress, size, MEM_COMMIT | MEM_RESERVE, PAGE_EXECUTE_READWRITE);
+                void* allocated = Syscall_AllocateMemory(mbi.BaseAddress, size, PAGE_READWRITE, g_SyscallTable);
                 if (allocated) return allocated;
             }
             searchAddr += mbi.RegionSize;
@@ -166,7 +178,7 @@ namespace YooK
         m_impl->m_originalBytes.resize(m_impl->m_stolenBytes);
         std::memcpy(m_impl->m_originalBytes.data(), m_impl->m_target, m_impl->m_stolenBytes);
 
-        m_impl->m_trampoline = VirtualAlloc(nullptr, m_impl->m_trampBytes, MEM_COMMIT | MEM_RESERVE, PAGE_EXECUTE_READWRITE);
+        m_impl->m_trampoline = Syscall_AllocateMemory(nullptr, m_impl->m_trampBytes, PAGE_READWRITE, g_SyscallTable);
         if (!m_impl->m_trampoline) [[unlikely]] return std::unexpected(HookError::AllocFailed);
 
         auto trampBytes = reinterpret_cast<uint8_t*>(m_impl->m_trampoline);
@@ -178,8 +190,11 @@ namespace YooK
         trampBranch[1] = ARM64_INS_BR_X16;
         std::memcpy(&trampBranch[2], &retAddr, sizeof(retAddr));
 
+        DWORD trampProtect;
+        (void)Syscall_ProtectMemory(m_impl->m_trampoline, m_impl->m_trampBytes, PAGE_EXECUTE_READ, trampProtect, g_SyscallTable);
+
         DWORD patchProtect;
-        if (!VirtualProtect(m_impl->m_target, m_impl->m_stolenBytes, PAGE_EXECUTE_READWRITE, &patchProtect)) [[unlikely]]
+        if (!Syscall_ProtectMemory(m_impl->m_target, m_impl->m_stolenBytes, PAGE_READWRITE, patchProtect, g_SyscallTable)) [[unlikely]]
             return std::unexpected(HookError::VirtualProtectFailed);
         
         auto patchArea = reinterpret_cast<uint32_t*>(m_impl->m_target);
@@ -196,9 +211,10 @@ namespace YooK
             reinterpret_cast<volatile uint32_t*>(patchArea)[0] = ARM64_INS_LDR_X16_PC8;
         }
 
-        VirtualProtect(m_impl->m_target, m_impl->m_stolenBytes, patchProtect, &patchProtect);
-        FlushInstructionCache(GetCurrentProcess(), m_impl->m_trampoline, m_impl->m_trampBytes);
-        FlushInstructionCache(GetCurrentProcess(), m_impl->m_target, m_impl->m_stolenBytes);
+        DWORD tempProtect;
+        (void)Syscall_ProtectMemory(m_impl->m_target, m_impl->m_stolenBytes, patchProtect, tempProtect, g_SyscallTable);
+        (void)Syscall_FlushInstructionCache((HANDLE)-1, m_impl->m_trampoline, m_impl->m_trampBytes, g_SyscallTable);
+        (void)Syscall_FlushInstructionCache((HANDLE)-1, m_impl->m_target, m_impl->m_stolenBytes, g_SyscallTable);
 
         m_impl->m_enabled = true;
         m_impl->m_status = HookStatus::Hooked;
@@ -245,7 +261,7 @@ namespace YooK
             if (!g_vehHandle) [[unlikely]] return std::unexpected(HookError::VehRegFailed);
         }
 
-        if (!VirtualProtect(m_impl->m_target, 1, PAGE_EXECUTE_READ | PAGE_GUARD, &m_impl->oldProtection)) [[unlikely]]
+        if (!Syscall_ProtectMemory(m_impl->m_target, 1, PAGE_EXECUTE_READ | PAGE_GUARD, m_impl->oldProtection, g_SyscallTable)) [[unlikely]]
         {
             AcquireSRWLockExclusive(&g_registryLock);
             std::erase(g_hookRegistry, m_impl.get());
@@ -267,14 +283,14 @@ namespace YooK
 
         if (m_impl->m_status == HookStatus::Hooked && !m_impl->m_originalBytes.empty()) [[likely]]
         {
-            DWORD tempProtect;
-            VirtualProtect(m_impl->m_target, m_impl->m_stolenBytes, PAGE_EXECUTE_READWRITE, &tempProtect);
+            DWORD tempProtect, temp2;
+            (void)Syscall_ProtectMemory(m_impl->m_target, m_impl->m_stolenBytes, PAGE_READWRITE, tempProtect, g_SyscallTable);
             std::memcpy(m_impl->m_target, m_impl->m_originalBytes.data(), m_impl->m_stolenBytes);
-            VirtualProtect(m_impl->m_target, m_impl->m_stolenBytes, tempProtect, &tempProtect);
+            (void)Syscall_ProtectMemory(m_impl->m_target, m_impl->m_stolenBytes, tempProtect, temp2, g_SyscallTable);
         }
 
         if (m_impl->m_trampoline) [[likely]]
-            { VirtualFree(m_impl->m_trampoline, 0, MEM_RELEASE); m_impl->m_trampoline = nullptr; }
+            { (void)Syscall_FreeMemory(m_impl->m_trampoline, 0, MEM_RELEASE, g_SyscallTable); m_impl->m_trampoline = nullptr; }
 
 #if !defined(_M_ARM64)
         AcquireSRWLockExclusive(&g_registryLock);
@@ -315,7 +331,7 @@ namespace
 #ifdef _WIN64
                     hookInstance->m_trampoline = AllocNearby(hookInstance->m_target, 48);
 #else
-                    hookInstance->m_trampoline = VirtualAlloc(nullptr, 48, MEM_COMMIT | MEM_RESERVE, PAGE_EXECUTE_READWRITE);
+                    hookInstance->m_trampoline = Syscall_AllocateMemory(nullptr, 48, PAGE_READWRITE, g_SyscallTable);
 #endif
                     if (!hookInstance->m_trampoline) [[unlikely]] 
                     {
@@ -324,7 +340,7 @@ namespace
                     }
 
                     DWORD temp;
-                    VirtualProtect(hookInstance->m_target, 1, PAGE_EXECUTE_READ, &temp);
+                    (void)Syscall_ProtectMemory(hookInstance->m_target, 1, PAGE_EXECUTE_READ, temp, g_SyscallTable);
                     context->EFlags |= EFLAGS_TRAP_FLAG; 
                     return EXCEPTION_CONTINUE_EXECUTION;
                 }
@@ -352,7 +368,7 @@ namespace
                 activeHook->m_status = YooK::HookStatus::ErrorUnsupportedPrologue;
                 context->EFlags &= ~EFLAGS_TRAP_FLAG;
                 DWORD temp;
-                VirtualProtect(activeHook->m_target, 1, activeHook->oldProtection, &temp);
+                (void)Syscall_ProtectMemory(activeHook->m_target, 1, activeHook->oldProtection, temp, g_SyscallTable);
                 return EXCEPTION_CONTINUE_EXECUTION;
             }
 
@@ -473,10 +489,16 @@ namespace
             std::memcpy(&trampBytes[activeHook->m_trampBytes + 1], &trampRelativeOffset, 4);
 #endif
 
+            // Transition trampoline from PAGE_READWRITE to PAGE_EXECUTE_READ once complete
+            DWORD trampOldProtect;
+            size_t totalTrampSize = activeHook->m_trampBytes + 14;
+            (void)Syscall_ProtectMemory(activeHook->m_trampoline, totalTrampSize, PAGE_EXECUTE_READ, trampOldProtect, g_SyscallTable);
+            (void)Syscall_FlushInstructionCache((HANDLE)-1, activeHook->m_trampoline, totalTrampSize, g_SyscallTable);
+
             // Atomic Hot-Patch
             DWORD patchProtect;
             size_t protectSize = (activeHook->m_stolenBytes > 8) ? activeHook->m_stolenBytes : 8;
-            VirtualProtect(activeHook->m_target, protectSize, PAGE_EXECUTE_READWRITE, &patchProtect);
+            (void)Syscall_ProtectMemory(activeHook->m_target, protectSize, PAGE_READWRITE, patchProtect, g_SyscallTable);
 
             auto src = reinterpret_cast<uintptr_t>(activeHook->m_target);
             auto dst = reinterpret_cast<uintptr_t>(activeHook->m_detour);
@@ -507,8 +529,9 @@ namespace
             if (activeHook->m_stolenBytes > 8) [[unlikely]]
                 std::memset(reinterpret_cast<void*>(src + 8), X86_OPCODE_NOP, activeHook->m_stolenBytes - 8);
 
-            VirtualProtect(activeHook->m_target, protectSize, patchProtect, &patchProtect);
-            FlushInstructionCache(GetCurrentProcess(), activeHook->m_target, activeHook->m_stolenBytes);
+            DWORD tempProtect2;
+            (void)Syscall_ProtectMemory(activeHook->m_target, protectSize, patchProtect, tempProtect2, g_SyscallTable);
+            (void)Syscall_FlushInstructionCache((HANDLE)-1, activeHook->m_target, activeHook->m_stolenBytes, g_SyscallTable);
 
             // VEH destruction
             AcquireSRWLockExclusive(&g_registryLock);
