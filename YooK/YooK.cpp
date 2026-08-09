@@ -138,7 +138,7 @@ namespace
 
             if (mbi.State == MEM_FREE && mbi.RegionSize >= size)
             {
-                void* allocated = Syscall_AllocateMemory(mbi.BaseAddress, size, PAGE_READWRITE, g_SyscallTable);
+                void* allocated = Y3lib::Memory::MemoryManager::Instance().AllocateVirtual(size, PAGE_READWRITE, mbi.BaseAddress);
                 if (allocated) return allocated;
             }
             searchAddr += mbi.RegionSize;
@@ -178,7 +178,7 @@ namespace YooK
         m_impl->m_originalBytes.resize(m_impl->m_stolenBytes);
         std::memcpy(m_impl->m_originalBytes.data(), m_impl->m_target, m_impl->m_stolenBytes);
 
-        m_impl->m_trampoline = Syscall_AllocateMemory(nullptr, m_impl->m_trampBytes, PAGE_READWRITE, g_SyscallTable);
+        m_impl->m_trampoline = Y3lib::Memory::MemoryManager::Instance().AllocateVirtual(m_impl->m_trampBytes, PAGE_READWRITE);
         if (!m_impl->m_trampoline) [[unlikely]] return std::unexpected(HookError::AllocFailed);
 
         auto trampBytes = reinterpret_cast<uint8_t*>(m_impl->m_trampoline);
@@ -191,10 +191,10 @@ namespace YooK
         std::memcpy(&trampBranch[2], &retAddr, sizeof(retAddr));
 
         DWORD trampProtect;
-        (void)Syscall_ProtectMemory(m_impl->m_trampoline, m_impl->m_trampBytes, PAGE_EXECUTE_READ, trampProtect, g_SyscallTable);
+        (void)Y3lib::Memory::MemoryManager::Instance().Protect(m_impl->m_trampoline, m_impl->m_trampBytes, PAGE_EXECUTE_READ, trampProtect);
 
         DWORD patchProtect;
-        if (!Syscall_ProtectMemory(m_impl->m_target, m_impl->m_stolenBytes, PAGE_READWRITE, patchProtect, g_SyscallTable)) [[unlikely]]
+        if (!Y3lib::Memory::MemoryManager::Instance().Protect(m_impl->m_target, m_impl->m_stolenBytes, PAGE_READWRITE, patchProtect)) [[unlikely]]
             return std::unexpected(HookError::VirtualProtectFailed);
         
         auto patchArea = reinterpret_cast<uint32_t*>(m_impl->m_target);
@@ -212,7 +212,7 @@ namespace YooK
         }
 
         DWORD tempProtect;
-        (void)Syscall_ProtectMemory(m_impl->m_target, m_impl->m_stolenBytes, patchProtect, tempProtect, g_SyscallTable);
+        (void)Y3lib::Memory::MemoryManager::Instance().Protect(m_impl->m_target, m_impl->m_stolenBytes, patchProtect, tempProtect);
         (void)Syscall_FlushInstructionCache((HANDLE)-1, m_impl->m_trampoline, m_impl->m_trampBytes, g_SyscallTable);
         (void)Syscall_FlushInstructionCache((HANDLE)-1, m_impl->m_target, m_impl->m_stolenBytes, g_SyscallTable);
 
@@ -261,7 +261,7 @@ namespace YooK
             if (!g_vehHandle) [[unlikely]] return std::unexpected(HookError::VehRegFailed);
         }
 
-        if (!Syscall_ProtectMemory(m_impl->m_target, 1, PAGE_EXECUTE_READ | PAGE_GUARD, m_impl->oldProtection, g_SyscallTable)) [[unlikely]]
+        if (!Y3lib::Memory::MemoryManager::Instance().Protect(m_impl->m_target, 1, PAGE_EXECUTE_READ | PAGE_GUARD, m_impl->oldProtection)) [[unlikely]]
         {
             AcquireSRWLockExclusive(&g_registryLock);
             std::erase(g_hookRegistry, m_impl.get());
@@ -284,13 +284,13 @@ namespace YooK
         if (m_impl->m_status == HookStatus::Hooked && !m_impl->m_originalBytes.empty()) [[likely]]
         {
             DWORD tempProtect, temp2;
-            (void)Syscall_ProtectMemory(m_impl->m_target, m_impl->m_stolenBytes, PAGE_READWRITE, tempProtect, g_SyscallTable);
+            (void)Y3lib::Memory::MemoryManager::Instance().Protect(m_impl->m_target, m_impl->m_stolenBytes, PAGE_READWRITE, tempProtect);
             std::memcpy(m_impl->m_target, m_impl->m_originalBytes.data(), m_impl->m_stolenBytes);
-            (void)Syscall_ProtectMemory(m_impl->m_target, m_impl->m_stolenBytes, tempProtect, temp2, g_SyscallTable);
+            (void)Y3lib::Memory::MemoryManager::Instance().Protect(m_impl->m_target, m_impl->m_stolenBytes, tempProtect, temp2);
         }
 
         if (m_impl->m_trampoline) [[likely]]
-            { (void)Syscall_FreeMemory(m_impl->m_trampoline, 0, MEM_RELEASE, g_SyscallTable); m_impl->m_trampoline = nullptr; }
+            { Y3lib::Memory::MemoryManager::Instance().FreeVirtual(m_impl->m_trampoline, 0); m_impl->m_trampoline = nullptr; }
 
 #if !defined(_M_ARM64)
         AcquireSRWLockExclusive(&g_registryLock);
@@ -331,7 +331,7 @@ namespace
 #ifdef _WIN64
                     hookInstance->m_trampoline = AllocNearby(hookInstance->m_target, 48);
 #else
-                    hookInstance->m_trampoline = Syscall_AllocateMemory(nullptr, 48, PAGE_READWRITE, g_SyscallTable);
+                    hookInstance->m_trampoline = Y3lib::Memory::MemoryManager::Instance().AllocateVirtual(48, PAGE_READWRITE);
 #endif
                     if (!hookInstance->m_trampoline) [[unlikely]] 
                     {
@@ -340,7 +340,7 @@ namespace
                     }
 
                     DWORD temp;
-                    (void)Syscall_ProtectMemory(hookInstance->m_target, 1, PAGE_EXECUTE_READ, temp, g_SyscallTable);
+                    (void)Y3lib::Memory::MemoryManager::Instance().Protect(hookInstance->m_target, 1, PAGE_EXECUTE_READ, temp);
                     context->EFlags |= EFLAGS_TRAP_FLAG; 
                     return EXCEPTION_CONTINUE_EXECUTION;
                 }
@@ -368,7 +368,7 @@ namespace
                 activeHook->m_status = YooK::HookStatus::ErrorUnsupportedPrologue;
                 context->EFlags &= ~EFLAGS_TRAP_FLAG;
                 DWORD temp;
-                (void)Syscall_ProtectMemory(activeHook->m_target, 1, activeHook->oldProtection, temp, g_SyscallTable);
+                (void)Y3lib::Memory::MemoryManager::Instance().Protect(activeHook->m_target, 1, activeHook->oldProtection, temp);
                 return EXCEPTION_CONTINUE_EXECUTION;
             }
 
@@ -492,13 +492,13 @@ namespace
             // Transition trampoline from PAGE_READWRITE to PAGE_EXECUTE_READ once complete
             DWORD trampOldProtect;
             size_t totalTrampSize = activeHook->m_trampBytes + 14;
-            (void)Syscall_ProtectMemory(activeHook->m_trampoline, totalTrampSize, PAGE_EXECUTE_READ, trampOldProtect, g_SyscallTable);
+            (void)Y3lib::Memory::MemoryManager::Instance().Protect(activeHook->m_trampoline, totalTrampSize, PAGE_EXECUTE_READ, trampOldProtect);
             (void)Syscall_FlushInstructionCache((HANDLE)-1, activeHook->m_trampoline, totalTrampSize, g_SyscallTable);
 
             // Atomic Hot-Patch
             DWORD patchProtect;
             size_t protectSize = (activeHook->m_stolenBytes > 8) ? activeHook->m_stolenBytes : 8;
-            (void)Syscall_ProtectMemory(activeHook->m_target, protectSize, PAGE_READWRITE, patchProtect, g_SyscallTable);
+            (void)Y3lib::Memory::MemoryManager::Instance().Protect(activeHook->m_target, protectSize, PAGE_READWRITE, patchProtect);
 
             auto src = reinterpret_cast<uintptr_t>(activeHook->m_target);
             auto dst = reinterpret_cast<uintptr_t>(activeHook->m_detour);
@@ -530,7 +530,7 @@ namespace
                 std::memset(reinterpret_cast<void*>(src + 8), X86_OPCODE_NOP, activeHook->m_stolenBytes - 8);
 
             DWORD tempProtect2;
-            (void)Syscall_ProtectMemory(activeHook->m_target, protectSize, patchProtect, tempProtect2, g_SyscallTable);
+            (void)Y3lib::Memory::MemoryManager::Instance().Protect(activeHook->m_target, protectSize, patchProtect, tempProtect2);
             (void)Syscall_FlushInstructionCache((HANDLE)-1, activeHook->m_target, activeHook->m_stolenBytes, g_SyscallTable);
 
             // VEH destruction
