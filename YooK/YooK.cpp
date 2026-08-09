@@ -92,12 +92,12 @@ namespace YooK
 
         static void* operator new(size_t size) noexcept
         {
-            return Y3lib::Memory::MemoryManager::Instance().Allocate(size, Y3lib::Memory::TAG_GENERIC, _ReturnAddress());
+            return Y3lib::Memory::MemoryManager::Instance().AllocateFast(size);
         }
 
         static void operator delete(void* ptr) noexcept
         {
-            Y3lib::Memory::MemoryManager::Instance().Free(ptr);
+            Y3lib::Memory::MemoryManager::Instance().FreeFast(ptr);
         }
     };
 }
