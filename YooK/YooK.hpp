@@ -22,8 +22,7 @@
  */
 
 #pragma once
-#include <cstdint>
-#include <vector>
+#include <memory>
 
 #if __cplusplus >= 202302L
     #include <expected>
@@ -71,27 +70,18 @@ namespace YooK
     
     class Hook
     {
+        public:
+            struct Impl;
+
         private:
-            void* m_target{ nullptr };
-            void* m_detour{ nullptr };
-            void* m_trampoline{ nullptr };
-
-            std::vector<uint8_t> m_originalBytes;
-            std::size_t m_stolenBytes{ 0 };
-            std::size_t m_trampBytes{ 0 }; // NEW: Independent trampoline write cursor
-
-            DWORD oldProtection{ 0 };
-            bool m_enabled{ false };
-            HookStatus m_status{ HookStatus::Idle };
-
-            static auto CALLBACK exception_handler(PEXCEPTION_POINTERS exceptionInfo) noexcept -> LONG;
+            std::unique_ptr<Impl> m_impl;
 
         public:
             Hook(const Hook&) = delete;
             Hook& operator=(const Hook&) = delete;
 
-            Hook(Hook&& other) noexcept = default;
-            Hook& operator=(Hook&& other) noexcept = default;
+            Hook(Hook&& other) noexcept;
+            Hook& operator=(Hook&& other) noexcept;
 
             Hook(void* target, void* detour) noexcept;
             ~Hook();
@@ -99,9 +89,9 @@ namespace YooK
             [[nodiscard]] auto enable() noexcept -> std::expected<void, HookError>;
             [[nodiscard]] auto disable() noexcept -> std::expected<void, HookError>;
 
-            [[nodiscard]] auto isEnabled() const noexcept -> bool { return m_enabled; }
-            [[nodiscard]] auto getStatus() const noexcept -> HookStatus { return m_status; }
-            [[nodiscard]] auto getTrampoline() const noexcept -> void* { return m_trampoline; }
-            [[nodiscard]] auto getTarget() const noexcept -> void* { return m_target; }
+            [[nodiscard]] auto isEnabled() const noexcept -> bool;
+            [[nodiscard]] auto getStatus() const noexcept -> HookStatus;
+            [[nodiscard]] auto getTrampoline() const noexcept -> void*;
+            [[nodiscard]] auto getTarget() const noexcept -> void*;
     };
 }
