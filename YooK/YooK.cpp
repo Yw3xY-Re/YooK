@@ -27,7 +27,7 @@
 #include <algorithm>
 #include "YooK.hpp"
 #include "Y3lib/include/Y3lib/Memory/Allocator/Container/Vector.hpp"
-#include "Y3lib/include/Y3lib/Syscalls/Syscalls.h"
+#include "Y3lib/include/Y3lib/EatTraversal/ntdll/syscalls/Syscalls.h"
 
 // Instruction Definitions
 
