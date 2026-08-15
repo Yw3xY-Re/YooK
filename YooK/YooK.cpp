@@ -136,7 +136,7 @@ namespace
 
             if (mbi.State == MEM_FREE && mbi.RegionSize >= size)
             {
-                void* allocated = Y3lib::Memory::Allocator::Instance().AllocateVirtual(size, PAGE_READWRITE, mbi.BaseAddress);
+                void* allocated = Y3lib::Memory::Allocator::Instance().AllocateFast(size, (HANDLE)-1, PAGE_READWRITE, ALLOC_FLAG_FORCE_VIRTUAL, mbi.BaseAddress);
                 if (allocated) return allocated;
             }
             searchAddr += mbi.RegionSize;
@@ -176,7 +176,7 @@ namespace YooK
         m_impl->m_originalBytes.resize(m_impl->m_stolenBytes);
         std::memcpy(m_impl->m_originalBytes.data(), m_impl->m_target, m_impl->m_stolenBytes);
 
-        m_impl->m_trampoline = Y3lib::Memory::Allocator::Instance().AllocateVirtual(m_impl->m_trampBytes, PAGE_READWRITE);
+        m_impl->m_trampoline = Y3lib::Memory::Allocator::Instance().AllocateFast(m_impl->m_trampBytes, (HANDLE)-1, PAGE_READWRITE, ALLOC_FLAG_FORCE_VIRTUAL);
         if (!m_impl->m_trampoline) [[unlikely]] return std::unexpected(HookError::AllocFailed);
 
         auto trampBytes = reinterpret_cast<uint8_t*>(m_impl->m_trampoline);
@@ -288,7 +288,7 @@ namespace YooK
         }
 
         if (m_impl->m_trampoline) [[likely]]
-            { Y3lib::Memory::Allocator::Instance().FreeVirtual(m_impl->m_trampoline, 0); m_impl->m_trampoline = nullptr; }
+            { Y3lib::Memory::Allocator::Instance().FreeFast(m_impl->m_trampoline, 0); m_impl->m_trampoline = nullptr; }
 
 #if !defined(_M_ARM64)
         AcquireSRWLockExclusive(&g_registryLock);
@@ -329,7 +329,7 @@ namespace
 #ifdef _WIN64
                     hookInstance->m_trampoline = AllocNearby(hookInstance->m_target, 48);
 #else
-                    hookInstance->m_trampoline = Y3lib::Memory::Allocator::Instance().AllocateVirtual(48, PAGE_READWRITE);
+                    hookInstance->m_trampoline = Y3lib::Memory::Allocator::Instance().AllocateFast(48, (HANDLE)-1, PAGE_READWRITE, ALLOC_FLAG_FORCE_VIRTUAL);
 #endif
                     if (!hookInstance->m_trampoline) [[unlikely]] 
                     {
