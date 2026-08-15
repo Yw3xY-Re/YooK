@@ -21,17 +21,20 @@
  * =========================================================================================
  */
 
+#ifndef WIN32_LEAN_AND_MEAN
 #define WIN32_LEAN_AND_MEAN
+#endif
 #include <Windows.h>
 #include <cstring>
 #include <algorithm>
 #include "YooK.hpp"
 #include "Y3lib/include/Y3lib/Memory/Allocator/Container/Vector.hpp"
 #include "Y3lib/include/Y3lib/EatTraversal/ntdll/syscalls/Syscalls.h"
+#include "Y3lib/include/Y3lib/EatTraversal/ntdll/ntdll.hpp"
+#include "Y3lib/include/Y3lib/Memory/Allocator/Allocator.hpp"
 
-// Instruction Definitions
+// Instruction Definitions (x64 Specialized)
 
-// x86 / x64 Opcode Constants
 #define X86_OPCODE_JMP_NEAR         0xE9
 #define X86_OPCODE_JMP_SHORT        0xEB
 #define X86_OPCODE_CALL_NEAR        0xE8
@@ -39,12 +42,12 @@
 #define X86_OPCODE_GRP5             0xFF
 #define X86_OPCODE_NOP              0x90
 
-// x86 / x64 ModR/M and Sub-Opcode Identifiers
+// x64 ModR/M and Sub-Opcode Identifiers
 #define X86_MODRM_JMP_INDIRECT      0x25
 #define X86_MODRM_RIP_MASK          0xC7
 #define X86_MODRM_RIP_MATCH         0x05
 
-// x86 / x64 Conditional Jump Step Bounds
+// x64 Conditional Jump Step Bounds
 #define X86_SHORT_COND_JMP_BASE     0x70
 #define X86_SHORT_COND_JMP_MAX      0x7F
 #define X86_NEAR_COND_JMP_BASE      0x80
@@ -58,12 +61,6 @@
 #define X86_PREFIX_LOCK             0xF0
 #define X86_PREFIX_REPNE            0xF2
 #define X86_PREFIX_REPE             0xF3
-
-// ARM64 Binary Instruction Structures
-#define ARM64_INS_LDR_X16_PC8       0x58000050 // LDR X16, [PC, #8]
-#define ARM64_INS_BR_X16            0xD61F0200 // BR X16
-#define ARM64_INS_B_BASE            0x14000000 // B (Immediate) baseline opcode
-#define ARM64_OFFSET_MASK_26BIT     0x3FFFFFF  // Sign-extended 26-bit branch mask
 
 // Processor Flag Bitmasks
 #define EFLAGS_TRAP_FLAG            0x100      // Trap Flag (TF) control bit for single-stepping
@@ -100,25 +97,45 @@ namespace YooK
     };
 }
 
-
-#if !defined(_M_ARM64)
-// Architecture abstraction for Intel/AMD execution contexts
-#ifdef _WIN64
-    #define XIP Rip
-#else
-    #define XIP Eip
-#endif
-
-    Y3lib::Memory::vector<YooK::Hook::Impl*> g_hookRegistry;
 namespace 
 {
+    Y3lib::Memory::vector<YooK::Hook::Impl*> g_hookRegistry;
     SRWLOCK g_registryLock = SRWLOCK_INIT;
     void* g_vehHandle = nullptr;
 
     auto CALLBACK exception_handler(PEXCEPTION_POINTERS exceptionInfo) noexcept -> LONG;
-#endif
 
-#ifdef _WIN64
+    // Direct dynamic VEH Registration via RtlAddVectoredExceptionHandler / Pointer Encoding
+    typedef PVOID (NTAPI *pfnRtlAddVectoredExceptionHandler)(ULONG First, PVECTORED_EXCEPTION_HANDLER Handler);
+    typedef ULONG (NTAPI *pfnRtlRemoveVectoredExceptionHandler)(PVOID Handle);
+
+    [[nodiscard]] void* StealthRegisterVEH(PVECTORED_EXCEPTION_HANDLER pHandler) noexcept
+    {
+        auto& table = Y3lib::ntdll::Table();
+        if (table.RtlAddVectoredExceptionHandler)
+        {
+            auto pfnAdd = reinterpret_cast<pfnRtlAddVectoredExceptionHandler>(table.RtlAddVectoredExceptionHandler);
+            return pfnAdd(1, pHandler);
+        }
+
+        return AddVectoredExceptionHandler(1, pHandler);
+    }
+
+    void StealthUnregisterVEH(void* hVeh) noexcept
+    {
+        if (!hVeh) return;
+
+        auto& table = Y3lib::ntdll::Table();
+        if (table.RtlRemoveVectoredExceptionHandler)
+        {
+            auto pfnRemove = reinterpret_cast<pfnRtlRemoveVectoredExceptionHandler>(table.RtlRemoveVectoredExceptionHandler);
+            pfnRemove(hVeh);
+            return;
+        }
+
+        RemoveVectoredExceptionHandler(hVeh);
+    }
+
     auto AllocNearby(void* target, size_t size) noexcept -> void*
     {
         SYSTEM_INFO si;
@@ -143,7 +160,6 @@ namespace
         }
         return nullptr;
     }
-#endif
 }
 
 namespace YooK
@@ -164,61 +180,7 @@ namespace YooK
     {
         if (!m_impl || m_impl->m_enabled) [[unlikely]] return std::unexpected(HookError::AlreadyHooked);
 
-#if defined(_M_ARM64)
-        auto src = reinterpret_cast<uintptr_t>(m_impl->m_target);
-        auto dst = reinterpret_cast<uintptr_t>(m_impl->m_detour);
-        auto delta = static_cast<ptrdiff_t>(dst - src);
-
-        bool isNearBranch = (delta >= -134217728 && delta <= 134217724);
-        m_impl->m_stolenBytes = isNearBranch ? 4 : 16;
-        m_impl->m_trampBytes = m_impl->m_stolenBytes + 16; 
-
-        m_impl->m_originalBytes.resize(m_impl->m_stolenBytes);
-        std::memcpy(m_impl->m_originalBytes.data(), m_impl->m_target, m_impl->m_stolenBytes);
-
-        m_impl->m_trampoline = Y3lib::Memory::Allocator::Instance().AllocateFast(m_impl->m_trampBytes, (HANDLE)-1, PAGE_READWRITE, ALLOC_FLAG_FORCE_VIRTUAL);
-        if (!m_impl->m_trampoline) [[unlikely]] return std::unexpected(HookError::AllocFailed);
-
-        auto trampBytes = reinterpret_cast<uint8_t*>(m_impl->m_trampoline);
-        std::memcpy(trampBytes, m_impl->m_originalBytes.data(), m_impl->m_stolenBytes);
-        
-        uintptr_t retAddr = src + m_impl->m_stolenBytes;
-        auto trampBranch = reinterpret_cast<uint32_t*>(trampBytes + m_impl->m_stolenBytes);
-        trampBranch[0] = ARM64_INS_LDR_X16_PC8;
-        trampBranch[1] = ARM64_INS_BR_X16;
-        std::memcpy(&trampBranch[2], &retAddr, sizeof(retAddr));
-
-        DWORD trampProtect;
-        (void)Y3lib::Memory::Allocator::Instance().Protect(m_impl->m_trampoline, m_impl->m_trampBytes, PAGE_EXECUTE_READ, trampProtect);
-
-        DWORD patchProtect;
-        if (!Y3lib::Memory::Allocator::Instance().Protect(m_impl->m_target, m_impl->m_stolenBytes, PAGE_READWRITE, patchProtect)) [[unlikely]]
-            return std::unexpected(HookError::VirtualProtectFailed);
-        
-        auto patchArea = reinterpret_cast<uint32_t*>(m_impl->m_target);
-        if (m_impl->m_stolenBytes == 4) 
-        {
-            auto offsetMask = (static_cast<uint32_t>(delta >> 2) & ARM64_OFFSET_MASK_26BIT);
-            reinterpret_cast<volatile uint32_t*>(patchArea)[0] = ARM64_INS_B_BASE | offsetMask;
-        } 
-        else 
-        {
-            *reinterpret_cast<volatile uintptr_t*>(&patchArea[2]) = dst;
-            reinterpret_cast<volatile uint32_t*>(patchArea)[1] = ARM64_INS_BR_X16;
-            MemoryBarrier();
-            reinterpret_cast<volatile uint32_t*>(patchArea)[0] = ARM64_INS_LDR_X16_PC8;
-        }
-
-        DWORD tempProtect;
-        (void)Y3lib::Memory::Allocator::Instance().Protect(m_impl->m_target, m_impl->m_stolenBytes, patchProtect, tempProtect);
-        (void)Syscall_FlushInstructionCache((HANDLE)-1, m_impl->m_trampoline, m_impl->m_trampBytes, g_SyscallTable);
-        (void)Syscall_FlushInstructionCache((HANDLE)-1, m_impl->m_target, m_impl->m_stolenBytes, g_SyscallTable);
-
-        m_impl->m_enabled = true;
-        m_impl->m_status = HookStatus::Hooked;
-        return {};
-#else
-        // x86 / x64 unconditional branch chasing
+        // x64 unconditional branch chasing
         while (true)
         {
             auto currentCode = reinterpret_cast<uint8_t*>(m_impl->m_target);
@@ -233,16 +195,12 @@ namespace YooK
             {
                 auto shortOffset = *reinterpret_cast<int8_t*>(&currentCode[1]);
                 m_impl->m_target = reinterpret_cast<void*>(reinterpret_cast<uintptr_t>(m_impl->m_target) + 2 + shortOffset);
-                continue;
+                continue; 
             }
             else if (currentCode[0] == X86_OPCODE_GRP5 && currentCode[1] == X86_MODRM_JMP_INDIRECT)
             {
-#ifdef _WIN64
                 auto ripOffset = *reinterpret_cast<uint32_t*>(&currentCode[2]);
                 auto pointerLocation = reinterpret_cast<uintptr_t>(m_impl->m_target) + 6 + ripOffset;
-#else
-                auto pointerLocation = *reinterpret_cast<uintptr_t*>(&currentCode[2]);
-#endif
                 m_impl->m_target = *reinterpret_cast<void**>(pointerLocation);
                 continue;
             }
@@ -255,7 +213,7 @@ namespace YooK
 
         if (!g_vehHandle) 
         {
-            g_vehHandle = AddVectoredExceptionHandler(1, exception_handler);
+            g_vehHandle = StealthRegisterVEH(exception_handler);
             if (!g_vehHandle) [[unlikely]] return std::unexpected(HookError::VehRegFailed);
         }
 
@@ -272,7 +230,6 @@ namespace YooK
         m_impl->m_stolenBytes = 0;
         m_impl->m_trampBytes = 0;
         return{};
-#endif
     }
 
     auto Hook::disable() noexcept -> std::expected<void, HookError>
@@ -288,27 +245,28 @@ namespace YooK
         }
 
         if (m_impl->m_trampoline) [[likely]]
-            { Y3lib::Memory::Allocator::Instance().FreeFast(m_impl->m_trampoline, 0); m_impl->m_trampoline = nullptr; }
+        {
+            Y3lib::Memory::Allocator::Instance().FreeFast(m_impl->m_trampoline, 0); 
+            m_impl->m_trampoline = nullptr; 
+        }
 
-#if !defined(_M_ARM64)
         AcquireSRWLockExclusive(&g_registryLock);
         std::erase(g_hookRegistry, m_impl.get());
         
-        // If no hooks remain, unregister from Windows entirely
+        // If no hooks remain, unregister VEH
         if (g_hookRegistry.empty() && g_vehHandle) [[likely]]
         {
-            RemoveVectoredExceptionHandler(g_vehHandle);
+            StealthUnregisterVEH(g_vehHandle);
             g_vehHandle = nullptr;
         }
         ReleaseSRWLockExclusive(&g_registryLock);
-#endif
+
         m_impl->m_enabled = false;
         m_impl->m_status = HookStatus::Idle;
         return{};
     }
 }
 
-#if !defined(_M_ARM64)
 namespace
 {
     auto CALLBACK exception_handler(PEXCEPTION_POINTERS exceptionInfo) noexcept -> LONG
@@ -320,17 +278,13 @@ namespace
         {
             for (auto* hookInstance : g_hookRegistry)
             {
-                if (reinterpret_cast<void*>(context->XIP) == hookInstance->m_target)
+                if (reinterpret_cast<void*>(context->Rip) == hookInstance->m_target)
                 {
                     hookInstance->m_stolenBytes = 0;
                     hookInstance->m_trampBytes = 0;
 
                     // 48 bytes secures space for instruction bloat (upgrading 2b jumps to 6b)
-#ifdef _WIN64
                     hookInstance->m_trampoline = AllocNearby(hookInstance->m_target, 48);
-#else
-                    hookInstance->m_trampoline = Y3lib::Memory::Allocator::Instance().AllocateFast(48, (HANDLE)-1, PAGE_READWRITE, ALLOC_FLAG_FORCE_VIRTUAL);
-#endif
                     if (!hookInstance->m_trampoline) [[unlikely]] 
                     {
                         hookInstance->m_status = YooK::HookStatus::ErrorAllocFailed;
@@ -357,9 +311,9 @@ namespace
 
             if (!activeHook) return EXCEPTION_CONTINUE_SEARCH;
 
-            uintptr_t currentXip = context->XIP;
+            uintptr_t currentRip = context->Rip;
             auto lastInstructionStart = reinterpret_cast<uintptr_t>(activeHook->m_target) + activeHook->m_stolenBytes;
-            size_t instructionSize = currentXip - lastInstructionStart;
+            size_t instructionSize = currentRip - lastInstructionStart;
 
             if (instructionSize > 15) [[unlikely]]
             {
@@ -400,7 +354,7 @@ namespace
                 std::memcpy(trampIns + 1, &correctedDisp, sizeof(int32_t));
                 bytesWrittenToTramp = 5;
             }
-            // 3. Handle standard instructions and pre-existing near jumps
+            // Handle standard instructions and pre-existing near jumps
             else
             {
                 std::memcpy(trampIns, ins, instructionSize);
@@ -422,7 +376,6 @@ namespace
                     std::memcpy(trampIns + 2, &correctedDisp, sizeof(int32_t));
                 }
 
-#ifdef _WIN64
                 // x64 ModR/M Data Offset Fixer
                 size_t cursor = 0;
                 while (cursor < instructionSize) 
@@ -452,11 +405,10 @@ namespace
                         std::memcpy(trampIns + dispOffset, &correctedDisp, sizeof(int32_t));
                     }
                 }
-#endif
             }
 
             activeHook->m_stolenBytes += instructionSize;
-            activeHook->m_trampBytes += bytesWrittenToTramp; // Advance independent cursor
+            activeHook->m_trampBytes += bytesWrittenToTramp;
 
             if (activeHook->m_stolenBytes < 5)
             {
@@ -474,18 +426,11 @@ namespace
             auto trampBytes = reinterpret_cast<uint8_t*>(activeHook->m_trampoline);
             auto retAddr = reinterpret_cast<uintptr_t>(activeHook->m_target) + activeHook->m_stolenBytes;
                 
-#ifdef _WIN64
-            // Append jump back using m_trampBytes footprint
+            // Append 14-byte 64-bit indirect jump back: JMP [RIP+0] -> retAddr
             trampBytes[activeHook->m_trampBytes] = X86_OPCODE_GRP5;
             trampBytes[activeHook->m_trampBytes + 1] = X86_MODRM_JMP_INDIRECT;
             std::memset(&trampBytes[activeHook->m_trampBytes + 2], 0, 4); 
             std::memcpy(&trampBytes[activeHook->m_trampBytes + 6], &retAddr, sizeof(retAddr));
-#else
-            auto trampSrc = reinterpret_cast<uintptr_t>(trampBytes + activeHook->m_trampBytes);
-            auto trampRelativeOffset = static_cast<uint32_t>(retAddr - (trampSrc + 5));
-            trampBytes[activeHook->m_trampBytes] = X86_OPCODE_JMP_NEAR;
-            std::memcpy(&trampBytes[activeHook->m_trampBytes + 1], &trampRelativeOffset, 4);
-#endif
 
             // Transition trampoline from PAGE_READWRITE to PAGE_EXECUTE_READ once complete
             DWORD trampOldProtect;
@@ -493,7 +438,7 @@ namespace
             (void)Y3lib::Memory::Allocator::Instance().Protect(activeHook->m_trampoline, totalTrampSize, PAGE_EXECUTE_READ, trampOldProtect);
             (void)Syscall_FlushInstructionCache((HANDLE)-1, activeHook->m_trampoline, totalTrampSize, g_SyscallTable);
 
-            // Atomic Hot-Patch
+            // Atomic 8-byte Hot-Patch
             DWORD patchProtect;
             size_t protectSize = (activeHook->m_stolenBytes > 8) ? activeHook->m_stolenBytes : 8;
             (void)Y3lib::Memory::Allocator::Instance().Protect(activeHook->m_target, protectSize, PAGE_READWRITE, patchProtect);
@@ -531,7 +476,7 @@ namespace
             (void)Y3lib::Memory::Allocator::Instance().Protect(activeHook->m_target, protectSize, patchProtect, tempProtect2);
             (void)Syscall_FlushInstructionCache((HANDLE)-1, activeHook->m_target, activeHook->m_stolenBytes, g_SyscallTable);
 
-            // VEH destruction
+            // VEH immediate unregistration upon completion
             AcquireSRWLockExclusive(&g_registryLock);
             bool anyStillCalculating = std::any_of(g_hookRegistry.begin(), g_hookRegistry.end(), [](YooK::Hook::Impl* h) 
             {
@@ -540,7 +485,7 @@ namespace
 
             if (!anyStillCalculating && g_vehHandle) [[likely]]
             {
-                RemoveVectoredExceptionHandler(g_vehHandle);
+                StealthUnregisterVEH(g_vehHandle);
                 g_vehHandle = nullptr;
             }
             ReleaseSRWLockExclusive(&g_registryLock);
@@ -549,5 +494,4 @@ namespace
         }
         return EXCEPTION_CONTINUE_SEARCH;
     }
-}
-#endif
+}

@@ -27,7 +27,7 @@
 #if __cplusplus >= 202302L
     #include <expected>
 #else
-    // C++20 backward compability
+    // C++20 backward compatibility
     namespace std 
     {
         template <typename T, typename E>
@@ -46,7 +46,9 @@
     }
 #endif
 
+#ifndef WIN32_LEAN_AND_MEAN
 #define WIN32_LEAN_AND_MEAN
+#endif
 #include <Windows.h>
 
 namespace YooK
@@ -70,28 +72,28 @@ namespace YooK
     
     class Hook
     {
-        public:
-            struct Impl;
+    public:
+        struct Impl;
 
-        private:
-            std::unique_ptr<Impl> m_impl;
+    private:
+        std::unique_ptr<Impl> m_impl;
 
-        public:
-            Hook(const Hook&) = delete;
-            Hook& operator=(const Hook&) = delete;
+    public:
+        Hook(const Hook&) = delete;
+        Hook& operator=(const Hook&) = delete;
 
-            Hook(Hook&& other) noexcept;
-            Hook& operator=(Hook&& other) noexcept;
+        Hook(Hook&& other) noexcept;
+        Hook& operator=(Hook&& other) noexcept;
 
-            Hook(void* target, void* detour) noexcept;
-            ~Hook();
+        Hook(void* target, void* detour) noexcept;
+        ~Hook();
 
-            [[nodiscard]] auto enable() noexcept -> std::expected<void, HookError>;
-            [[nodiscard]] auto disable() noexcept -> std::expected<void, HookError>;
+        [[nodiscard]] auto enable() noexcept -> std::expected<void, HookError>;
+        [[nodiscard]] auto disable() noexcept -> std::expected<void, HookError>;
 
-            [[nodiscard]] auto isEnabled() const noexcept -> bool;
-            [[nodiscard]] auto getStatus() const noexcept -> HookStatus;
-            [[nodiscard]] auto getTrampoline() const noexcept -> void*;
-            [[nodiscard]] auto getTarget() const noexcept -> void*;
+        [[nodiscard]] auto isEnabled() const noexcept -> bool;
+        [[nodiscard]] auto getStatus() const noexcept -> HookStatus;
+        [[nodiscard]] auto getTrampoline() const noexcept -> void*;
+        [[nodiscard]] auto getTarget() const noexcept -> void*;
     };
 }
