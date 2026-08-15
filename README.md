@@ -1,99 +1,109 @@
-# YooK
+# YooK, Y3lib Branch
 
-An ultra-lightweight (~510 LoC), multi-architecture inline hooking and instrumentation framework for Windows user-mode (x86, x64, ARM64) built in modern C++23 with C++20 backward compatibility. 
+An ultra-lightweight (~550 LoC) inline hooking and runtime instrumentation framework for Windows user-mode built in modern C++23.
 
----
+> [!NOTE]
+> **Architecture Support in this Branch:** Unlike standalone YooK (which supports x86, x64, and ARM64), **this Y3lib branch exclusively targets x64 (64-bit)**. This architectural restriction is intentional: the entire Y3lib ecosystem (including indirect syscall stubs, SSN extraction, stack spoofing, and allocator routines) is built and optimized strictly for 64-bit Windows execution.
 
-> **Author Note:** This engine was built entirely from scratch purely out of the desire for a raw, low-level technical challenge. Why copy-paste bloated, thousand-line software disassemblers when you can weaponize the physical silicon registers to do the math for you?
-
----
-
-## Core Architecture Concept
-
-YooK completely eliminates traditional user-mode Length Disassembler Engines (LDEs). Instead, it uses **hardware-assisted side channels** to turn the physical processor itself into the disassembler.
-
-* **x86/x64 Tracking:** Registers a localized Vectored Exception Handler and arms a `PAGE_GUARD` on the target function prologue. When executed, the VEH captures the fault and flips the CPU Trap Flag (`EFLAGS.TF`). The thread single-steps until a 5-byte relative jump boundary is discovered, constructs the trampoline, hot-patches the prologue, and exits.
-* **ARM64 Tracking:** Automatically drops the exception mechanics entirely when compiled for RISC architectures, using the fixed 4-byte instruction width to instantly install synchronous near/far branches safely.
-* **Transient OS Footprint:** The exact microsecond the hook calculation finishes and the atomic patch is written, YooK queries its internal state machine. If no other hooks are calculating, it permanently unregisters the VEH handle from the Windows kernel, leaving zero passive registration trails in memory.
+This edition of **YooK** is uniquely specialized and integrated into the **Y3lib** ecosystem, replacing standard runtime dependencies, heap allocators, and Win32 user-mode APIs with hardened indirect syscalls and high-speed custom heap management.
 
 ---
 
-## The Philosophy: Hardware vs. Software (LDEs)
-
-Most mainstream hooking libraries (e.g., MinHook, Detours, PolyHook) rely on embedded Length Disassembler Engines (LDEs) to calculate instruction boundaries before writing an inline patch. YooK discards this approach entirely. Here is why:
-
-* **Future-Proof Opcode Independence:** Traditional LDEs use massive, hardcoded lookup tables. When a compiler generates a new or complex instruction extension that the LDE's table hasn't mapped, the engine miscalculates the length, slices an instruction in half, and instantly crashes the host process. YooK never parses bytes manually; the physical Intel/AMD silicon inherently knows how to decode its own instructions, making YooK functionally immune to unknown opcode crashes.
-* **Drastic Bloat Reduction:** Software disassemblers require thousands of lines of switch-case statements, operand matrices, and prefix evaluators to do their job. By routing the calculation through the native hardware execution flags, YooK achieves the exact same inline jump precision while keeping the entire framework footprint at roughly **510 lines of code**.
-* **True Execution Context:** Static disassemblers read dead bytes from memory. YooK evaluates them dynamically during live execution, allowing it to natively sidestep superficial static compiler tricks that easily confuse standard LDEs.
+> **Architectural Philosophy:** Why rely on bloated disassemblers or noisy user-mode Win32 hooks when you can weaponize hardware Trap Flags and silent indirect syscalls to manipulate memory under the radar?
 
 ---
 
-## Deep-Dive Feature Breakdown
+## What Makes the Y3lib Edition Superior?
 
-### 1. Zero Static Signature Footprint
-Traditional hooking engines embed heavy decoding tables (like HDE or Zydis) containing massive data blocks to parse opcode prefixes, ModR/M fields, and SIB bytes. Because YooK delegates instruction decoding entirely to the physical CPU via the hardware single-step exception line, it contains zero hardcoded instruction lookup tables, drastically reducing binary bloat and signature footprints.
+While the standalone edition of YooK demonstrates the power of hardware-assisted instruction tracing without Length Disassembler Engines (LDEs), the **Y3lib Integrated Edition** evolves YooK into a stealthy, allocation-aware instrumentation engine:
 
-### 2. Lock-Free Atomic Thread Safety
-Unlike legacy engines that use `SuspendThread` to freeze the entire process (causing render pipeline crashes and micro-stutters), YooK applies its final hook via a single-cycle 8-byte hardware bus lock (`InterlockedCompareExchange64`). Global registry writes are insulated by zero-overhead Windows Slim Reader/Writer (SRW) locks. The result is flawless multi-threaded stability without ever pausing background execution.
-
-### 3. Dynamic Conditional Branch Upgrading
-When relocating a function prologue to a 48-byte allocated trampoline, 2-byte short jumps frequently break because the destination is now out of structural range. YooK intercepts these on the fly, seamlessly upgrading Short Conditional Jumps (`0x70-0x7F`) into 6-byte Near Conditional Jumps (`0x0F 0x80-0x8F`) and absolute short jumps (`0xEB`) into near jumps (`0xE9`) to guarantee 2 GB of relative reach.
-
-### 4. Insulated ModR/M RIP-Relative Reconstruction
-Modern x64 compilers heavily utilize RIP-relative data displacements in function prologues (e.g., `mov rcx, [rip + 0x1234]`). YooK features a surgical byte-scanner that identifies the exact ModR/M signature (`0xC7 == 0x05`) for these instructions, automatically calculating and rewriting the displacement offsets inside the trampoline to maintain perfect data integrity.
-
-### 5. Infinite Recursive Trampoline Peeling
-When target execution paths are already hooked by incremental linking thunks or third-party overlays, typical hooking engines corrupt the byte sequence. YooK recursively extracts and follows the displacement math of `0xE9`, `0xEB`, and `0xFF 25` instructions, peeling away existing abstraction wrappers until it identifies the actual bedrock target address.
+| Feature / Metric | Standard YooK Standalone | YooK (Y3lib Integrated Edition) |
+| :--- | :--- | :--- |
+| **Virtual Memory Allocations** | Standard `VirtualAlloc` / `VirtualProtect` | **`Y3lib::Memory::Allocator` & Indirect Syscalls** (`Syscall_AllocateVirtualMemory`) |
+| **Memory Protection Changes** | High-level `VirtualProtect` Win32 API hooks | **Syscall-backed protection transitions** via indirect SSN tables |
+| **Heap Memory Overhead** | Standard C++ runtime CRT Heap (`malloc`/`operator new`) | **Zero-overhead fast tracked heap** (`Y3lib::Memory::Allocator::Instance().AllocateFast`) |
+| **Instruction Cache Flushes** | Win32 `FlushInstructionCache` API | **Direct `Syscall_FlushInstructionCache`** bypassing user-mode API shims and AV/EDR hooks |
+| **Memory Querying** | Standard `VirtualQuery` | **`Syscall_QueryVirtualMemory`** using internal Syscall resolver tables |
+| **Container Footprint** | Standard CRT `std::vector` (CRT heap dependent) | **Modular `Y3lib::Memory::vector`** backed by isolated `STLAllocator` |
+| **Hook Footprint** | ~510 Lines of Code | **~550 Lines of Code with complete kernel syscall independence** |
 
 ---
 
-## Bottlenecks & Technical Constraints
+## Core Architecture & Hardware-Driven Mechanics
 
-YooK is engineered specifically for internal runtimes targeting clean, highly optimized binary modules. Due to its reliance on physical hardware traps, it carries the following hard constraints:
+YooK eliminates traditional Length Disassembler Engines (like Zydis, Capstone, or HDE) and instead uses **hardware-assisted CPU execution traps**:
 
-* **Environment Dependent:** Works on Windows **user mode** only due to the usage of Vectored Exception Handling and the WIN32 APIs. Even though it could be ported to other operating systems via signals, the goal of this project is to reduce bloat as much as possible while maintaining the best functionality achievable within the Windows subsystem.
-* **User-Mode Debugger Collisions:** Because YooK actively hijacks the CPU's hardware Trap Flag, it is structurally incompatible with external user-mode debuggers. Attempting to step through a hooked target function using `x64dbg` or Visual Studio will result in exception routing collisions between the debugger and the engine, however a crash caused by YooK is very unlikely especially if the target user works on isn't packed or heavily obfuscated.
-* **Obfuscated & Packed Memory:** Commercial software protectors (VMProtect, Themida) intentionally inject fake page faults, anti-debugging single-step checks, and broken stack pointers into function prologues. YooK's VEH tracking loop will fail if it encounters these intentional hardware traps.
-* **Microsecond First-Call Latency:** The absolute first invocation of a hooked function triggers a sequence of single-step exceptions where the thread drops into hardware tracing mode. While this latency window lasts less than a millisecond, it represents a minor processing delay that only occurs on the very first function execution tick. Practically unnoticeable.
+1. **Hardware Single-Step Decoding (x64):** 
+   - Registers a localized Vectored Exception Handler (VEH) and arms a `PAGE_GUARD` on the target function prologue.
+   - When the function is entered, the CPU faults into the VEH, captures the context, and sets the Trap Flag (`EFLAGS.TF`).
+   - The CPU single-steps one instruction at a time, calculating exact machine instruction boundaries dynamically without needing any static lookup tables.
+   - Once 5 stolen bytes are gathered, YooK builds the relocated trampoline, applies atomic 8-byte hot-patching (`InterlockedCompareExchange64`), and disarms the Trap Flag.
+
+2. **Transient Memory & VEH Footprint:**
+   - The microsecond hook calculation finishes and all active hooks reach `HookStatus::Hooked`, YooK unregisters its VEH handler from `ntdll!RtlRemoveVectoredExceptionHandler`.
+   - Leaves zero passive handler registrations in the Windows kernel during steady-state execution.
+
+4. **Dynamic Trampoline Branch Upgrading:**
+   - Automatically detects and expands 2-byte Short Conditional Jumps (`0x70-0x7F`) into 6-byte Near Conditional Jumps (`0x0F 0x80-0x8F`).
+   - Upgrades 2-byte Short Unconditional Jumps (`0xEB`) into 5-byte Near Jumps (`0xE9`).
+   - Recalculates and repairs x64 ModR/M RIP-relative data displacements (`0xC7 == 0x05`) to keep reference pointers valid inside the relocated trampoline.
 
 ---
 
-## Integration Showcase
+## Y3lib Subsystem Integration Details
 
-Integrating YooK inside a project is clean and direct:
+### 1. Indirect Syscall Evasion
+Rather than calling high-level `kernel32`/`kernelbase` exports (e.g. `VirtualProtect`, `VirtualAlloc`, `FlushInstructionCache`) which are universally monitored and hooked by endpoint security products, the Y3lib edition routes critical memory operations through indirect syscall shims (`Syscalls.h`):
+- Memory discovery via `Syscall_QueryVirtualMemory`
+- CPU pipeline synchronization via `Syscall_FlushInstructionCache`
+- Memory protection adjustment via `Allocator::Protect`
+
+### 2. High-Performance Arena & Fast Allocations
+Hook internal structures (`Hook::Impl`), trampoline buffers, and runtime hook registries utilize `Y3lib::Memory::Allocator`:
+- Trampolines allocated via `Allocator::AllocateVirtual` with near-memory proximity searching (`AllocNearby`).
+- Internal vector registries (`Y3lib::Memory::vector`) allocate from fast heap pools rather than the default CRT heap, ensuring hook state data does not pollute normal CRT heaps.
+
+---
+
+## Usage Example
 
 ```cpp
 #include <iostream>
-#include <YooK.hpp>
+#include "Y3lib/include/Y3lib/Yook/YooK/YooK.hpp"
 
-// A mock target engine function to instrument
-__declspec(noinline) void OriginalFunction(int val)
+// Target function to instrument
+__declspec(noinline) void OriginalFunction(int value)
 {
-    std::cout << "[Target] Original executed with value: " << val << "\n";
+    std::cout << "[Target] Original called with: " << value << "\n";
 }
 
-// Our custom instrumentation detour
-void DetourFunction(int val)
+// Custom detour function
+void DetourFunction(int value)
 {
-    std::cout << "[Detour] Intercepted execution context safely, value: " << val << "\n";
+    std::cout << "[Detour] Intercepted value: " << value << "\n";
 }
 
 int main()
 {
-    // Initialize the YooK context mapping
-    YooK::Hook myHook(reinterpret_cast<void*>(OriginalFunction), reinterpret_cast<void*>(DetourFunction));
+    // Initialize the YooK hook instance
+    YooK::Hook hook(reinterpret_cast<void*>(OriginalFunction), reinterpret_cast<void*>(DetourFunction));
 
-    // Arm the hardware exception loop
-    auto result = myHook.enable();
-    if (!result.has_value()) return -1;
+    // Arm the hardware single-stepping and syscall-backed protection
+    auto result = hook.enable();
+    if (!result.has_value())
+    {
+        std::cerr << "Hooking failed\n";
+        return -1;
+    }
 
-    // First call trips the guard, triggers single-stepping, and hot-patches the function dynamically
+    // First call: Triggers PAGE_GUARD, steps CPU through prologue, hot-patches atomically
     OriginalFunction(1337);
 
-    // Second call routes with zero overhead directly into the detour function
+    // Subsequent calls: Direct inline jump to detour with zero overhead
     OriginalFunction(42);
 
-    // Clean up the process space (Transient VEH unregisters automatically)
-    myHook.disable();
+    // Disable and restore original prologue bytes
+    hook.disable();
     return 0;
 }
+```
