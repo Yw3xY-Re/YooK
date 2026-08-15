@@ -24,10 +24,9 @@
 #define WIN32_LEAN_AND_MEAN
 #include <Windows.h>
 #include <cstring>
-#include <memory>
 #include <algorithm>
 #include "YooK.hpp"
-#include "Y3lib/include/Y3lib/Memory/Allocator/Allocator.hpp"
+#include "Y3lib/include/Y3lib/Memory/Allocator/Container/Vector.hpp"
 #include "Y3lib/include/Y3lib/Syscalls/Syscalls.h"
 
 // Instruction Definitions
