@@ -21,49 +21,47 @@
  * =========================================================================================
  */
 
-#ifndef WIN32_LEAN_AND_MEAN
-#define WIN32_LEAN_AND_MEAN
-#endif
 #include <Windows.h>
 #include <cstring>
 #include <algorithm>
 #include "YooK.hpp"
 #include "Y3lib/include/Y3lib/Memory/Allocator/Container/Vector.hpp"
-#include "Y3lib/include/Y3lib/EatTraversal/ntdll/syscalls/Syscalls.h"
+#include "Y3lib/include/Y3lib/EatTraversal/Syscalls/Syscalls.hpp"
 #include "Y3lib/include/Y3lib/EatTraversal/ntdll/ntdll.hpp"
 #include "Y3lib/include/Y3lib/Memory/Allocator/Allocator.hpp"
 
+
 // Instruction Definitions (x64 Specialized)
 
-#define X86_OPCODE_JMP_NEAR         0xE9
-#define X86_OPCODE_JMP_SHORT        0xEB
-#define X86_OPCODE_CALL_NEAR        0xE8
-#define X86_OPCODE_ESCAPE_2BYTE     0x0F
-#define X86_OPCODE_GRP5             0xFF
-#define X86_OPCODE_NOP              0x90
+#define X86_OPCODE_JMP_NEAR 0xE9
+#define X86_OPCODE_JMP_SHORT 0xEB
+#define X86_OPCODE_CALL_NEAR 0xE8
+#define X86_OPCODE_ESCAPE_2BYTE 0x0F
+#define X86_OPCODE_GRP5 0xFF
+#define X86_OPCODE_NOP 0x90
 
 // x64 ModR/M and Sub-Opcode Identifiers
-#define X86_MODRM_JMP_INDIRECT      0x25
-#define X86_MODRM_RIP_MASK          0xC7
-#define X86_MODRM_RIP_MATCH         0x05
+#define X86_MODRM_JMP_INDIRECT 0x25
+#define X86_MODRM_RIP_MASK 0xC7
+#define X86_MODRM_RIP_MATCH 0x05
 
 // x64 Conditional Jump Step Bounds
-#define X86_SHORT_COND_JMP_BASE     0x70
-#define X86_SHORT_COND_JMP_MAX      0x7F
-#define X86_NEAR_COND_JMP_BASE      0x80
-#define X86_NEAR_COND_JMP_MAX       0x8F
+#define X86_SHORT_COND_JMP_BASE 0x70
+#define X86_SHORT_COND_JMP_MAX 0x7F
+#define X86_NEAR_COND_JMP_BASE 0x80
+#define X86_NEAR_COND_JMP_MAX 0x8F
 
 // x64 Instruction Legacy & REX Prefix Tables
-#define X64_REX_PREFIX_BASE         0x40
-#define X64_REX_PREFIX_MAX          0x4F
-#define X86_PREFIX_OPERAND_SIZE     0x66
-#define X86_PREFIX_ADDRESS_SIZE     0x67
-#define X86_PREFIX_LOCK             0xF0
-#define X86_PREFIX_REPNE            0xF2
-#define X86_PREFIX_REPE             0xF3
+#define X64_REX_PREFIX_BASE 0x40
+#define X64_REX_PREFIX_MAX 0x4F
+#define X86_PREFIX_OPERAND_SIZE 0x66
+#define X86_PREFIX_ADDRESS_SIZE 0x67
+#define X86_PREFIX_LOCK 0xF0
+#define X86_PREFIX_REPNE 0xF2
+#define X86_PREFIX_REPE 0xF3
 
 // Processor Flag Bitmasks
-#define EFLAGS_TRAP_FLAG            0x100      // Trap Flag (TF) control bit for single-stepping
+#define EFLAGS_TRAP_FLAG 0x100      // Trap Flag (TF) control bit for single-stepping
 
 // =========================================================================================
 
@@ -148,8 +146,10 @@ namespace
     
         while (searchAddr < maxAddr)
         {
-            MEMORY_BASIC_INFORMATION mbi;
-            if (Syscall_QueryVirtualMemory(reinterpret_cast<void*>(searchAddr), 0, &mbi, sizeof(mbi), nullptr, g_SyscallTable) != 0) [[unlikely]] break;
+            MEMORY_BASIC_INFORMATION mbi{};
+            SIZE_T retLen = 0;
+            NTSTATUS status = NT_SYSCALL(NtQueryVirtualMemory, (HANDLE)-1,reinterpret_cast<PVOID>(searchAddr), static_cast<ULONG>(0), &mbi, static_cast<SIZE_T>(sizeof(mbi)), &retLen);
+            if (status != 0) [[unlikely]] break;
 
             if (mbi.State == MEM_FREE && mbi.RegionSize >= size)
             {
@@ -158,6 +158,7 @@ namespace
             }
             searchAddr += mbi.RegionSize;
         }
+
         return nullptr;
     }
 }
@@ -436,7 +437,7 @@ namespace
             DWORD trampOldProtect;
             size_t totalTrampSize = activeHook->m_trampBytes + 14;
             (void)Y3lib::Memory::Allocator::Instance().Protect(activeHook->m_trampoline, totalTrampSize, PAGE_EXECUTE_READ, trampOldProtect);
-            (void)Syscall_FlushInstructionCache((HANDLE)-1, activeHook->m_trampoline, totalTrampSize, g_SyscallTable);
+            (void)NT_SYSCALL(NtFlushInstructionCache, (HANDLE)-1, activeHook->m_trampoline, static_cast<SIZE_T>(totalTrampSize));
 
             // Atomic 8-byte Hot-Patch
             DWORD patchProtect;
@@ -474,7 +475,8 @@ namespace
 
             DWORD tempProtect2;
             (void)Y3lib::Memory::Allocator::Instance().Protect(activeHook->m_target, protectSize, patchProtect, tempProtect2);
-            (void)Syscall_FlushInstructionCache((HANDLE)-1, activeHook->m_target, activeHook->m_stolenBytes, g_SyscallTable);
+            (void)NT_SYSCALL(NtFlushInstructionCache, (HANDLE)-1, activeHook->m_target, static_cast<SIZE_T>(activeHook->m_stolenBytes));
+
 
             // VEH immediate unregistration upon completion
             AcquireSRWLockExclusive(&g_registryLock);
@@ -494,4 +496,4 @@ namespace
         }
         return EXCEPTION_CONTINUE_SEARCH;
     }
-}
+}
