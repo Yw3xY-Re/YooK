@@ -21,6 +21,9 @@
  * =========================================================================================
  */
 
+#ifndef WIN32_LEAN_AND_MEAN
+#define WIN32_LEAN_AND_MEAN
+#endif
 #include <Windows.h>
 #include <cstring>
 #include <algorithm>
@@ -30,38 +33,79 @@
 #include "Y3lib/include/Y3lib/EatTraversal/ntdll/ntdll.hpp"
 #include "Y3lib/include/Y3lib/Memory/Allocator/Allocator.hpp"
 
-
 // Instruction Definitions (x64 Specialized)
 
+#ifndef X86_OPCODE_JMP_NEAR
 #define X86_OPCODE_JMP_NEAR 0xE9
+#endif
+#ifndef X86_OPCODE_JMP_SHORT
 #define X86_OPCODE_JMP_SHORT 0xEB
+#endif
+#ifndef X86_OPCODE_CALL_NEAR
 #define X86_OPCODE_CALL_NEAR 0xE8
+#endif
+#ifndef X86_OPCODE_ESCAPE_2BYTE
 #define X86_OPCODE_ESCAPE_2BYTE 0x0F
+#endif
+#ifndef X86_OPCODE_GRP5
 #define X86_OPCODE_GRP5 0xFF
+#endif
+#ifndef X86_OPCODE_NOP
 #define X86_OPCODE_NOP 0x90
+#endif
 
 // x64 ModR/M and Sub-Opcode Identifiers
+#ifndef X86_MODRM_JMP_INDIRECT
 #define X86_MODRM_JMP_INDIRECT 0x25
+#endif
+#ifndef X86_MODRM_RIP_MASK
 #define X86_MODRM_RIP_MASK 0xC7
+#endif
+#ifndef X86_MODRM_RIP_MATCH
 #define X86_MODRM_RIP_MATCH 0x05
+#endif
 
 // x64 Conditional Jump Step Bounds
+#ifndef X86_SHORT_COND_JMP_BASE
 #define X86_SHORT_COND_JMP_BASE 0x70
+#endif
+#ifndef X86_SHORT_COND_JMP_MAX
 #define X86_SHORT_COND_JMP_MAX 0x7F
+#endif
+#ifndef X86_NEAR_COND_JMP_BASE
 #define X86_NEAR_COND_JMP_BASE 0x80
+#endif
+#ifndef X86_NEAR_COND_JMP_MAX
 #define X86_NEAR_COND_JMP_MAX 0x8F
+#endif
 
 // x64 Instruction Legacy & REX Prefix Tables
+#ifndef X64_REX_PREFIX_BASE
 #define X64_REX_PREFIX_BASE 0x40
+#endif
+#ifndef X64_REX_PREFIX_MAX
 #define X64_REX_PREFIX_MAX 0x4F
+#endif
+#ifndef X86_PREFIX_OPERAND_SIZE
 #define X86_PREFIX_OPERAND_SIZE 0x66
+#endif
+#ifndef X86_PREFIX_ADDRESS_SIZE
 #define X86_PREFIX_ADDRESS_SIZE 0x67
+#endif
+#ifndef X86_PREFIX_LOCK
 #define X86_PREFIX_LOCK 0xF0
+#endif
+#ifndef X86_PREFIX_REPNE
 #define X86_PREFIX_REPNE 0xF2
+#endif
+#ifndef X86_PREFIX_REPE
 #define X86_PREFIX_REPE 0xF3
+#endif
 
 // Processor Flag Bitmasks
+#ifndef EFLAGS_TRAP_FLAG
 #define EFLAGS_TRAP_FLAG 0x100      // Trap Flag (TF) control bit for single-stepping
+#endif
 
 // =========================================================================================
 
@@ -476,7 +520,6 @@ namespace
             DWORD tempProtect2;
             (void)Y3lib::Memory::Allocator::Instance().Protect(activeHook->m_target, protectSize, patchProtect, tempProtect2);
             (void)NT_SYSCALL(NtFlushInstructionCache, (HANDLE)-1, activeHook->m_target, static_cast<SIZE_T>(activeHook->m_stolenBytes));
-
 
             // VEH immediate unregistration upon completion
             AcquireSRWLockExclusive(&g_registryLock);
