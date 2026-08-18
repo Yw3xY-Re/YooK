@@ -153,12 +153,9 @@ namespace
 
     [[nodiscard]] void* StealthRegisterVEH(PVECTORED_EXCEPTION_HANDLER pHandler) noexcept
     {
-        auto& table = Y3lib::ntdll::Table();
-        if (table.RtlAddVectoredExceptionHandler)
-        {
-            auto pfnAdd = reinterpret_cast<pfnRtlAddVectoredExceptionHandler>(table.RtlAddVectoredExceptionHandler);
+        auto pfnAdd = reinterpret_cast<pfnRtlAddVectoredExceptionHandler>(NT_GET(RtlAddVectoredExceptionHandler));
+        if (pfnAdd)
             return pfnAdd(1, pHandler);
-        }
 
         return AddVectoredExceptionHandler(1, pHandler);
     }
@@ -167,16 +164,16 @@ namespace
     {
         if (!hVeh) return;
 
-        auto& table = Y3lib::ntdll::Table();
-        if (table.RtlRemoveVectoredExceptionHandler)
+        auto pfnRemove = reinterpret_cast<pfnRtlRemoveVectoredExceptionHandler>(NT_GET(RtlRemoveVectoredExceptionHandler));
+        if (pfnRemove)
         {
-            auto pfnRemove = reinterpret_cast<pfnRtlRemoveVectoredExceptionHandler>(table.RtlRemoveVectoredExceptionHandler);
             pfnRemove(hVeh);
             return;
         }
 
         RemoveVectoredExceptionHandler(hVeh);
     }
+
 
     auto AllocNearby(void* target, size_t size) noexcept -> void*
     {
