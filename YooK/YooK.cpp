@@ -28,10 +28,10 @@
 #include <cstring>
 #include <algorithm>
 #include "YooK.hpp"
-#include "Y3lib/include/Y3lib/Memory/Allocator/Container/Vector.hpp"
-#include "Y3lib/include/Y3lib/EatTraversal/Syscalls/Syscalls.hpp"
-#include "Y3lib/include/Y3lib/EatTraversal/ntdll/ntdll.hpp"
-#include "Y3lib/include/Y3lib/Memory/Allocator/Allocator.hpp"
+#include "Y3lib/include/Y3lib/Utils/Memory/Allocator/Container/Vector.hpp"
+#include "Y3lib/include/Y3lib/Resolution/EatTraversal/Syscalls/Syscalls.hpp"
+#include "Y3lib/include/Y3lib/Resolution/EatTraversal/ntdll/ntdll.hpp"
+#include "Y3lib/include/Y3lib/Utils/Memory/Allocator/Allocator.hpp"
 
 // Instruction Definitions (x64 Specialized)
 
