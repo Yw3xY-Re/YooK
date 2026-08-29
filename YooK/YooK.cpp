@@ -200,6 +200,11 @@ namespace
             searchAddr += mbi.RegionSize;
         }
 
+        // If nearby virtual allocation fails, fall back to Dual-View W^X Executable Heap
+        auto block = Y3lib::Memory::Allocator::Instance().AllocateExecutableHeap(size);
+        if (block.IsValid())
+            return block.ExecAddress();
+
         return nullptr;
     }
 }
