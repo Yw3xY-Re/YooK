@@ -320,7 +320,12 @@ namespace
         {
             for (auto* hookInstance : g_hookRegistry)
             {
-                if (reinterpret_cast<void*>(context->Rip) == hookInstance->m_target)
+#ifdef _WIN64
+                void* ip = reinterpret_cast<void*>(context->Rip);
+#else
+                void* ip = reinterpret_cast<void*>(context->Eip);
+#endif
+                if (ip == hookInstance->m_target)
                 {
                     hookInstance->m_stolenBytes = 0;
                     hookInstance->m_trampBytes = 0;
@@ -353,7 +358,11 @@ namespace
 
             if (!activeHook) return EXCEPTION_CONTINUE_SEARCH;
 
+#ifdef _WIN64
             uintptr_t currentRip = context->Rip;
+#else
+            uintptr_t currentRip = context->Eip;
+#endif
             auto lastInstructionStart = reinterpret_cast<uintptr_t>(activeHook->m_target) + activeHook->m_stolenBytes;
             size_t instructionSize = currentRip - lastInstructionStart;
 
