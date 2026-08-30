@@ -33,8 +33,9 @@
 #include "Y3lib/include/Y3lib/Resolution/EatTraversal/ntdll/ntdll.hpp"
 #include "Y3lib/include/Y3lib/Utils/Memory/Allocator/Allocator.hpp"
 
-// Instruction Definitions (x64 Specialized)
+// Instruction Definitions
 
+// x86 / x64 Opcode Constants
 #ifndef X86_OPCODE_JMP_NEAR
 #define X86_OPCODE_JMP_NEAR 0xE9
 #endif
@@ -54,7 +55,7 @@
 #define X86_OPCODE_NOP 0x90
 #endif
 
-// x64 ModR/M and Sub-Opcode Identifiers
+// x86 / x64 ModR/M and Sub-Opcode Identifiers
 #ifndef X86_MODRM_JMP_INDIRECT
 #define X86_MODRM_JMP_INDIRECT 0x25
 #endif
@@ -65,7 +66,7 @@
 #define X86_MODRM_RIP_MATCH 0x05
 #endif
 
-// x64 Conditional Jump Step Bounds
+// x86 / x64 Conditional Jump Step Bounds
 #ifndef X86_SHORT_COND_JMP_BASE
 #define X86_SHORT_COND_JMP_BASE 0x70
 #endif
@@ -102,9 +103,32 @@
 #define X86_PREFIX_REPE 0xF3
 #endif
 
+// ARM64 Binary Instruction Structures
+#ifndef ARM64_INS_LDR_X16_PC8
+#define ARM64_INS_LDR_X16_PC8 0x58000050 // LDR X16, [PC, #8]
+#endif
+#ifndef ARM64_INS_BR_X16
+#define ARM64_INS_BR_X16 0xD61F0200      // BR X16
+#endif
+#ifndef ARM64_INS_B_BASE
+#define ARM64_INS_B_BASE 0x14000000      // B (Immediate) baseline opcode
+#endif
+#ifndef ARM64_OFFSET_MASK_26BIT
+#define ARM64_OFFSET_MASK_26BIT 0x3FFFFFF // Sign-extended 26-bit branch mask
+#endif
+
 // Processor Flag Bitmasks
 #ifndef EFLAGS_TRAP_FLAG
 #define EFLAGS_TRAP_FLAG 0x100      // Trap Flag (TF) control bit for single-stepping
+#endif
+
+// Architecture-independent IP Register Macro
+#if !defined(_M_ARM64)
+#ifdef _WIN64
+    #define XIP Rip
+#else
+    #define XIP Eip
+#endif
 #endif
 
 // =========================================================================================
@@ -139,6 +163,7 @@ namespace YooK
     };
 }
 
+#if !defined(_M_ARM64)
 namespace 
 {
     Y3lib::Memory::vector<YooK::Hook::Impl*> g_hookRegistry;
@@ -174,9 +199,9 @@ namespace
         RemoveVectoredExceptionHandler(hVeh);
     }
 
-
     auto AllocNearby(void* target, size_t size) noexcept -> void*
     {
+#ifdef _WIN64
         SYSTEM_INFO si;
         GetSystemInfo(&si);
 
@@ -189,7 +214,7 @@ namespace
         {
             MEMORY_BASIC_INFORMATION mbi{};
             SIZE_T retLen = 0;
-            NTSTATUS status = NT_SYSCALL(NtQueryVirtualMemory, (HANDLE)-1,reinterpret_cast<PVOID>(searchAddr), static_cast<ULONG>(0), &mbi, static_cast<SIZE_T>(sizeof(mbi)), &retLen);
+            NTSTATUS status = NT_SYSCALL(NtQueryVirtualMemory, (HANDLE)-1, reinterpret_cast<PVOID>(searchAddr), static_cast<ULONG>(0), &mbi, static_cast<SIZE_T>(sizeof(mbi)), &retLen);
             if (status != 0) [[unlikely]] break;
 
             if (mbi.State == MEM_FREE && mbi.RegionSize >= size)
@@ -206,8 +231,20 @@ namespace
             return block.ExecAddress();
 
         return nullptr;
+#else
+        // x86 32-bit flat address space: Entire 4GB address space is within 32-bit relative displacement reach
+        void* allocated = Y3lib::Memory::Allocator::Instance().AllocateFast(size, (HANDLE)-1, PAGE_READWRITE, ALLOC_FLAG_FORCE_VIRTUAL);
+        if (allocated) return allocated;
+
+        auto block = Y3lib::Memory::Allocator::Instance().AllocateExecutableHeap(size);
+        if (block.IsValid())
+            return block.ExecAddress();
+
+        return nullptr;
+#endif
     }
 }
+#endif
 
 namespace YooK
 {
@@ -227,7 +264,67 @@ namespace YooK
     {
         if (!m_impl || m_impl->m_enabled) [[unlikely]] return std::unexpected(HookError::AlreadyHooked);
 
-        // x64 unconditional branch chasing
+#if defined(_M_ARM64)
+        auto src = reinterpret_cast<uintptr_t>(m_impl->m_target);
+        auto dst = reinterpret_cast<uintptr_t>(m_impl->m_detour);
+        auto delta = static_cast<ptrdiff_t>(dst - src);
+
+        bool isNearBranch = (delta >= -134217728 && delta <= 134217724);
+        m_impl->m_stolenBytes = isNearBranch ? 4 : 16;
+        m_impl->m_trampBytes = m_impl->m_stolenBytes + 16; 
+
+        m_impl->m_originalBytes.resize(m_impl->m_stolenBytes);
+        std::memcpy(m_impl->m_originalBytes.data(), m_impl->m_target, m_impl->m_stolenBytes);
+
+        m_impl->m_trampoline = Y3lib::Memory::Allocator::Instance().AllocateFast(m_impl->m_trampBytes, (HANDLE)-1, PAGE_READWRITE, ALLOC_FLAG_FORCE_VIRTUAL);
+        if (!m_impl->m_trampoline)
+        {
+            auto block = Y3lib::Memory::Allocator::Instance().AllocateExecutableHeap(m_impl->m_trampBytes);
+            if (block.IsValid())
+                m_impl->m_trampoline = block.ExecAddress();
+        }
+        if (!m_impl->m_trampoline) [[unlikely]] return std::unexpected(HookError::AllocFailed);
+
+        auto trampBytes = reinterpret_cast<uint8_t*>(m_impl->m_trampoline);
+        std::memcpy(trampBytes, m_impl->m_originalBytes.data(), m_impl->m_stolenBytes);
+        
+        uintptr_t retAddr = src + m_impl->m_stolenBytes;
+        auto trampBranch = reinterpret_cast<uint32_t*>(trampBytes + m_impl->m_stolenBytes);
+        trampBranch[0] = ARM64_INS_LDR_X16_PC8;
+        trampBranch[1] = ARM64_INS_BR_X16;
+        std::memcpy(&trampBranch[2], &retAddr, sizeof(retAddr));
+
+        DWORD trampOldProtect;
+        (void)Y3lib::Memory::Allocator::Instance().Protect(m_impl->m_trampoline, m_impl->m_trampBytes, PAGE_EXECUTE_READ, trampOldProtect);
+        (void)NT_SYSCALL(NtFlushInstructionCache, (HANDLE)-1, m_impl->m_trampoline, static_cast<SIZE_T>(m_impl->m_trampBytes));
+
+        DWORD patchProtect;
+        if (!Y3lib::Memory::Allocator::Instance().Protect(m_impl->m_target, m_impl->m_stolenBytes, PAGE_READWRITE, patchProtect)) [[unlikely]]
+            return std::unexpected(HookError::VirtualProtectFailed);
+        
+        auto patchArea = reinterpret_cast<uint32_t*>(m_impl->m_target);
+        if (m_impl->m_stolenBytes == 4) 
+        {
+            auto offsetMask = (static_cast<uint32_t>(delta >> 2) & ARM64_OFFSET_MASK_26BIT);
+            reinterpret_cast<volatile uint32_t*>(patchArea)[0] = ARM64_INS_B_BASE | offsetMask;
+        } 
+        else 
+        {
+            *reinterpret_cast<volatile uintptr_t*>(&patchArea[2]) = dst;
+            reinterpret_cast<volatile uint32_t*>(patchArea)[1] = ARM64_INS_BR_X16;
+            MemoryBarrier();
+            reinterpret_cast<volatile uint32_t*>(patchArea)[0] = ARM64_INS_LDR_X16_PC8;
+        }
+
+        DWORD tempProtect;
+        (void)Y3lib::Memory::Allocator::Instance().Protect(m_impl->m_target, m_impl->m_stolenBytes, patchProtect, tempProtect);
+        (void)NT_SYSCALL(NtFlushInstructionCache, (HANDLE)-1, m_impl->m_target, static_cast<SIZE_T>(m_impl->m_stolenBytes));
+
+        m_impl->m_enabled = true;
+        m_impl->m_status = HookStatus::Hooked;
+        return {};
+#else
+        // x86 / x64 unconditional branch chasing
         while (true)
         {
             auto currentCode = reinterpret_cast<uint8_t*>(m_impl->m_target);
@@ -246,8 +343,12 @@ namespace YooK
             }
             else if (currentCode[0] == X86_OPCODE_GRP5 && currentCode[1] == X86_MODRM_JMP_INDIRECT)
             {
+#ifdef _WIN64
                 auto ripOffset = *reinterpret_cast<uint32_t*>(&currentCode[2]);
                 auto pointerLocation = reinterpret_cast<uintptr_t>(m_impl->m_target) + 6 + ripOffset;
+#else
+                auto pointerLocation = *reinterpret_cast<uintptr_t*>(&currentCode[2]);
+#endif
                 m_impl->m_target = *reinterpret_cast<void**>(pointerLocation);
                 continue;
             }
@@ -277,6 +378,7 @@ namespace YooK
         m_impl->m_stolenBytes = 0;
         m_impl->m_trampBytes = 0;
         return{};
+#endif
     }
 
     auto Hook::disable() noexcept -> std::expected<void, HookError>
@@ -297,6 +399,7 @@ namespace YooK
             m_impl->m_trampoline = nullptr; 
         }
 
+#if !defined(_M_ARM64)
         AcquireSRWLockExclusive(&g_registryLock);
         std::erase(g_hookRegistry, m_impl.get());
         
@@ -307,6 +410,7 @@ namespace YooK
             g_vehHandle = nullptr;
         }
         ReleaseSRWLockExclusive(&g_registryLock);
+#endif
 
         m_impl->m_enabled = false;
         m_impl->m_status = HookStatus::Idle;
@@ -314,6 +418,7 @@ namespace YooK
     }
 }
 
+#if !defined(_M_ARM64)
 namespace
 {
     auto CALLBACK exception_handler(PEXCEPTION_POINTERS exceptionInfo) noexcept -> LONG
@@ -325,12 +430,7 @@ namespace
         {
             for (auto* hookInstance : g_hookRegistry)
             {
-#ifdef _WIN64
-                void* ip = reinterpret_cast<void*>(context->Rip);
-#else
-                void* ip = reinterpret_cast<void*>(context->Eip);
-#endif
-                if (ip == hookInstance->m_target)
+                if (reinterpret_cast<void*>(context->XIP) == hookInstance->m_target)
                 {
                     hookInstance->m_stolenBytes = 0;
                     hookInstance->m_trampBytes = 0;
@@ -363,13 +463,9 @@ namespace
 
             if (!activeHook) return EXCEPTION_CONTINUE_SEARCH;
 
-#ifdef _WIN64
-            uintptr_t currentRip = context->Rip;
-#else
-            uintptr_t currentRip = context->Eip;
-#endif
+            uintptr_t currentXip = context->XIP;
             auto lastInstructionStart = reinterpret_cast<uintptr_t>(activeHook->m_target) + activeHook->m_stolenBytes;
-            size_t instructionSize = currentRip - lastInstructionStart;
+            size_t instructionSize = currentXip - lastInstructionStart;
 
             if (instructionSize > 15) [[unlikely]]
             {
@@ -432,6 +528,7 @@ namespace
                     std::memcpy(trampIns + 2, &correctedDisp, sizeof(int32_t));
                 }
 
+#ifdef _WIN64
                 // x64 ModR/M Data Offset Fixer
                 size_t cursor = 0;
                 while (cursor < instructionSize) 
@@ -459,6 +556,7 @@ namespace
                         std::memcpy(trampIns + dispOffset, &correctedDisp, sizeof(int32_t));
                     }
                 }
+#endif
             }
 
             activeHook->m_stolenBytes += instructionSize;
@@ -480,15 +578,24 @@ namespace
             auto trampBytes = reinterpret_cast<uint8_t*>(activeHook->m_trampoline);
             auto retAddr = reinterpret_cast<uintptr_t>(activeHook->m_target) + activeHook->m_stolenBytes;
                 
+#ifdef _WIN64
             // Append 14-byte 64-bit indirect jump back: JMP [RIP+0] -> retAddr
             trampBytes[activeHook->m_trampBytes] = X86_OPCODE_GRP5;
             trampBytes[activeHook->m_trampBytes + 1] = X86_MODRM_JMP_INDIRECT;
             std::memset(&trampBytes[activeHook->m_trampBytes + 2], 0, 4); 
             std::memcpy(&trampBytes[activeHook->m_trampBytes + 6], &retAddr, sizeof(retAddr));
+            size_t totalTrampSize = activeHook->m_trampBytes + 14;
+#else
+            // Append 5-byte 32-bit relative jump back: JMP rel32 -> retAddr
+            auto trampSrc = reinterpret_cast<uintptr_t>(trampBytes + activeHook->m_trampBytes);
+            auto trampRelativeOffset = static_cast<uint32_t>(retAddr - (trampSrc + 5));
+            trampBytes[activeHook->m_trampBytes] = X86_OPCODE_JMP_NEAR;
+            std::memcpy(&trampBytes[activeHook->m_trampBytes + 1], &trampRelativeOffset, sizeof(uint32_t));
+            size_t totalTrampSize = activeHook->m_trampBytes + 5;
+#endif
 
             // Transition trampoline from PAGE_READWRITE to PAGE_EXECUTE_READ once complete
             DWORD trampOldProtect;
-            size_t totalTrampSize = activeHook->m_trampBytes + 14;
             (void)Y3lib::Memory::Allocator::Instance().Protect(activeHook->m_trampoline, totalTrampSize, PAGE_EXECUTE_READ, trampOldProtect);
             (void)NT_SYSCALL(NtFlushInstructionCache, (HANDLE)-1, activeHook->m_trampoline, static_cast<SIZE_T>(totalTrampSize));
 
@@ -542,3 +649,4 @@ namespace
         return EXCEPTION_CONTINUE_SEARCH;
     }
 }
+#endif
