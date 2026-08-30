@@ -437,9 +437,7 @@ namespace
                 while (cursor < instructionSize) 
                 {
                     auto b = ins[cursor];
-                    if ((b >= X64_REX_PREFIX_BASE && b <= X64_REX_PREFIX_MAX) || 
-                        b == X86_PREFIX_OPERAND_SIZE || b == X86_PREFIX_ADDRESS_SIZE || 
-                        b == X86_PREFIX_LOCK || b == X86_PREFIX_REPNE || b == X86_PREFIX_REPE) 
+                    if ((b >= X64_REX_PREFIX_BASE && b <= X64_REX_PREFIX_MAX) || b == X86_PREFIX_OPERAND_SIZE || b == X86_PREFIX_ADDRESS_SIZE || b == X86_PREFIX_LOCK || b == X86_PREFIX_REPNE || b == X86_PREFIX_REPE)
                     {
                         cursor++; continue;
                     }
@@ -515,11 +513,7 @@ namespace
                 for (size_t i = 5; i < activeHook->m_stolenBytes && i < 8; ++i) 
                 { patchBytes[i] = X86_OPCODE_NOP; }
 
-                uint64_t oldCheck = InterlockedCompareExchange64(
-                    reinterpret_cast<volatile LONG64*>(src),
-                    static_cast<LONG64>(newValue),
-                    static_cast<LONG64>(originalValue)
-                );
+                uint64_t oldCheck = InterlockedCompareExchange64(reinterpret_cast<volatile LONG64*>(src), static_cast<LONG64>(newValue), static_cast<LONG64>(originalValue));
 
                 if (oldCheck == originalValue) break;
                 originalValue = oldCheck;
@@ -534,10 +528,7 @@ namespace
 
             // VEH immediate unregistration upon completion
             AcquireSRWLockExclusive(&g_registryLock);
-            bool anyStillCalculating = std::any_of(g_hookRegistry.begin(), g_hookRegistry.end(), [](YooK::Hook::Impl* h) 
-            {
-                return h->m_status == YooK::HookStatus::Calculating;
-            });
+            bool anyStillCalculating = std::any_of(g_hookRegistry.begin(), g_hookRegistry.end(), [](YooK::Hook::Impl* h) { return h->m_status == YooK::HookStatus::Calculating; });
 
             if (!anyStillCalculating && g_vehHandle) [[likely]]
             {

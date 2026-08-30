@@ -1,5 +1,39 @@
-Copyright (C) 2026 Yw3xY-Re. All rights reserved.
+====================================================================================================
+                             PROPRIETARY SOURCE CODE & SOFTWARE NOTICE
+====================================================================================================
 
-This software and its associated source code are completely proprietary. 
-Unauthorized copying, modification, distribution, or reuse of this file, 
-via any medium, is strictly prohibited.
+Copyright (C) 2026 Yw3xY-Re. All Rights Reserved.
+
+CONFIDENTIAL & PROPRIETARY:
+This software, source code, headers, assembly routines, scripts, documentation, and all associated
+intellectual property (collectively, the "Software") are the sole and exclusive proprietary property
+of Yw3xY-Re (the "Author").
+
+TERMS AND CONDITIONS OF USE:
+
+1. PROHIBITION OF REDISTRIBUTION:
+   No part of this Software, in source code, intermediate, or compiled binary form, may be reproduced,
+   distributed, transmitted, displayed, broadcast, sublicensed, published, sold, or shared in any medium,
+   electronic or mechanical, without the prior express written authorization of the Author.
+
+2. PROHIBITION OF COMMERCIAL EXPLOITATION:
+   Commercial use, monetization, integration into commercial or enterprise products, or use in any
+   for-profit venture or consulting context is strictly and explicitly prohibited.
+
+3. PROHIBITION OF DERIVATIVE WORKS & CODE PLAGIARISM:
+   You may not alter, transform, adapt, translate, extract routines from, or build derivative works upon
+   this codebase. Incorporating any logic, MASM assembly routines, or algorithms into other public or
+   private repositories without written attribution and consent constitutes a violation of copyright.
+
+4. PORTFOLIO & ACADEMIC SHOWCASE EVALUATION:
+   Viewing and inspection of this repository is authorized exclusively for institutional admissions,
+   academic evaluation, peer review, and verified portfolio verification purposes. This authorization
+   does not grant any license to execute, copy, or redistribute the codebase.
+
+5. DISCLAIMER OF WARRANTY & LIMITATION OF LIABILITY:
+   THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT
+   LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE, AND NONINFRINGEMENT.
+   IN NO EVENT SHALL THE AUTHOR OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES, OR OTHER
+   LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT, OR OTHERWISE, ARISING FROM, OUT OF, OR IN CONNECTION
+   WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
+====================================================================================================
